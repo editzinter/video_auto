@@ -121,9 +121,12 @@ ${segment.text}
 }
 
 function formatSRTTime(timeStr: string): string {
-  // Convert HH:MM:SS to HH:MM:SS,000 format for SRT
-  if (timeStr.includes(',')) return timeStr;
-  return timeStr + ',000';
+  // Convert HH:MM:SS or HH:MM:SS.ms to HH:MM:SS,ms format for SRT
+  let time = timeStr.replace('.', ',');
+  if (!time.includes(',')) {
+    time += ',000';
+  }
+  return time;
 }
 
 interface GeminiTranscriptionResponse {

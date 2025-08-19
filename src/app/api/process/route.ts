@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
           .outputOptions([
             '-c:a', 'copy',
             '-c:v', 'libx264',
+            '-vsync', 'cfr',
             '-crf', '28',
             '-preset', 'ultrafast',
             '-movflags', '+faststart',
