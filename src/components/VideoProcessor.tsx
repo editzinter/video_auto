@@ -1,22 +1,18 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
-import { validateVideoFile, validateVideoDuration, formatFileSize, getVideoInfo, createVideoThumbnail, VideoInfo, formatDuration } from '@/utils/videoUtils';
+import { useState, useRef, useCallback } from 'react';
+import { validateVideoFile, validateVideoDuration, formatFileSize, getVideoInfo, createVideoThumbnail, VideoInfo } from '@/utils/videoUtils';
 import { transcribeVideoWithGemini, downloadSRT, TranscriptionResult } from '@/lib/gemini';
 
 interface ProcessingStep {
     id: string;
     name: string;
     status: 'pending' | 'processing' | 'completed' | 'error';
-    progress?: number;
 }
 
 export default function VideoProcessor() {
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-    const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
     const [processedVideoUrl, setProcessedVideoUrl] = useState<string | null>(null);
     const [processingSteps, setProcessingSteps] = useState<ProcessingStep[]>([]);
     const [logs, setLogs] = useState<string[]>([]);
@@ -25,9 +21,7 @@ export default function VideoProcessor() {
     const [error, setError] = useState<string | null>(null);
     const [transcriptionResult, setTranscriptionResult] = useState<TranscriptionResult | null>(null);
     const [isTranscribing, setIsTranscribing] = useState(false);
-    const [processingMode, setProcessingMode] = useState<'embedded' | 'burned'>('embedded');
 
-    const ffmpegRef = useRef<FFmpeg | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const addLog = useCallback((message: string) => {
@@ -40,43 +34,6 @@ export default function VideoProcessor() {
         );
     }, []);
 
-    const loadFFmpeg = useCallback(async () => {
-        if (ffmpegLoaded || ffmpegRef.current) return;
-
-        setIsLoading(true);
-        addLog('Loading FFmpeg...');
-
-        try {
-            const ffmpeg = new FFmpeg();
-
-            ffmpeg.on('log', ({ message }) => {
-                addLog(message);
-            });
-
-            ffmpeg.on('progress', ({ progress }) => {
-                const currentStep = processingSteps.find(step => step.status === 'processing');
-                if (currentStep) {
-                    updateStep(currentStep.id, { progress: Math.round(progress * 100) });
-                }
-            });
-
-            const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-            await ffmpeg.load({
-                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-            });
-
-            ffmpegRef.current = ffmpeg;
-            setFfmpegLoaded(true);
-            addLog('FFmpeg loaded successfully!');
-        } catch (error) {
-            console.error('Failed to load FFmpeg:', error);
-            addLog(`Failed to load FFmpeg: ${error}`);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [ffmpegLoaded, addLog, processingSteps, updateStep]);
-
     const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
@@ -87,6 +44,8 @@ export default function VideoProcessor() {
         setThumbnailUrl(null);
         setProcessedVideoUrl(null);
         setProcessingSteps([]);
+        setTranscriptionResult(null);
+        setLogs([]);
 
         // Validate file
         const validation = validateVideoFile(file);
@@ -146,84 +105,58 @@ export default function VideoProcessor() {
     };
 
     const processVideoWithCaptions = async () => {
-        if (!selectedFile || !ffmpegRef.current || !transcriptionResult) return;
+        if (!selectedFile || !transcriptionResult) return;
 
         const steps: ProcessingStep[] = [
-            { id: 'upload', name: 'Uploading to memory', status: 'pending' },
-            { id: 'srt', name: 'Creating subtitle file', status: 'pending' },
-            { id: 'burn', name: 'Burning captions into video', status: 'pending' },
+            { id: 'upload', name: 'Uploading to server', status: 'pending' },
+            { id: 'embed', name: 'Server embedding captions', status: 'pending' },
+            { id: 'download', name: 'Downloading result', status: 'pending' },
             { id: 'complete', name: 'Processing complete', status: 'pending' },
         ];
 
         setProcessingSteps(steps);
         setIsLoading(true);
+        addLog('Starting server-side caption embedding...');
 
         try {
-            const ffmpeg = ffmpegRef.current;
-
-            // Step 1: Upload to memory
+            // Step 1: Uploading
             updateStep('upload', { status: 'processing' });
-            addLog('Writing video file to FFmpeg memory...');
-            await ffmpeg.writeFile('input.mp4', await fetchFile(selectedFile));
+            const formData = new FormData();
+            formData.append('video', selectedFile);
+            formData.append('srtContent', transcriptionResult.srt_content);
+            addLog('Uploading video and captions to the server...');
             updateStep('upload', { status: 'completed' });
 
-            // Step 2: Create SRT file
-            updateStep('srt', { status: 'processing' });
-            addLog('Creating subtitle file...');
-            await ffmpeg.writeFile('captions.srt', transcriptionResult.srt_content);
-            updateStep('srt', { status: 'completed' });
+            // Step 2: Processing on server
+            updateStep('embed', { status: 'processing' });
+            addLog('Server is now embedding captions into the video. This will be very fast!');
+            const response = await fetch('/api/process', {
+                method: 'POST',
+                body: formData,
+            });
 
-            // Step 3: Burn captions into video
-            updateStep('burn', { status: 'processing' });
-            addLog(`Burning captions into video (${processingMode} mode)...`);
-            
-            let ffmpegArgs: string[];
-
-            if (processingMode === 'embedded') {
-                // Use embedded subtitles - ultra fast processing
-                ffmpegArgs = [
-                    '-i', 'input.mp4',
-                    '-i', 'captions.srt',
-                    '-c:v', 'copy',  // Copy video stream without re-encoding
-                    '-c:a', 'copy',  // Copy audio stream without re-encoding
-                    '-c:s', 'mov_text',  // Add subtitle track
-                    '-metadata:s:s:0', 'language=eng',
-                    '-disposition:s:0', 'default',
-                    '-movflags', '+faststart',
-                    'output.mp4'
-                ];
-                addLog('Using embedded subtitles - ultra fast processing...');
-            } else {
-                // Burned-in captions - much slower but always visible
-                ffmpegArgs = [
-                    '-i', 'input.mp4',
-                    '-vf', `subtitles=captions.srt:force_style='FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`,
-                    '-c:a', 'copy',
-                    '-c:v', 'libx264',
-                    '-crf', '28',
-                    '-preset', 'ultrafast',
-                    '-movflags', '+faststart',
-                    'output.mp4'
-                ];
-                addLog('Using burned-in captions - slower but always visible...');
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Server processing failed');
             }
+            updateStep('embed', { status: 'completed' });
 
-            await ffmpeg.exec(ffmpegArgs);
-            updateStep('burn', { status: 'completed' });
-
-            // Step 4: Get processed video
-            updateStep('complete', { status: 'processing' });
-            const data = await ffmpeg.readFile('output.mp4');
-            const videoBlob = new Blob([data], { type: 'video/mp4' });
+            // Step 3: Downloading result
+            updateStep('download', { status: 'processing' });
+            addLog('Downloading processed video from server...');
+            const videoBlob = await response.blob();
             const videoUrl = URL.createObjectURL(videoBlob);
-
             setProcessedVideoUrl(videoUrl);
+            updateStep('download', { status: 'completed' });
+
+            // Step 4: Complete
             updateStep('complete', { status: 'completed' });
-            addLog('Video with captions created successfully!');
+            addLog('Video with embedded captions created successfully!');
 
         } catch (error) {
-            console.error('Processing failed:', error);
-            addLog(`Processing failed: ${error}`);
+            console.error('Server processing failed:', error);
+            addLog(`Server-side processing failed: ${error}`);
+            setError(`Server-side processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
             const currentStep = processingSteps.find(step => step.status === 'processing');
             if (currentStep) {
                 updateStep(currentStep.id, { status: 'error' });
@@ -278,17 +211,6 @@ export default function VideoProcessor() {
                     </button>
                 </div>
 
-                {/* FFmpeg Loading */}
-                {!ffmpegLoaded && (
-                    <button
-                        onClick={loadFFmpeg}
-                        disabled={isLoading}
-                        className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium py-2 px-4 rounded-lg transition-colors"
-                    >
-                        {isLoading ? 'Loading FFmpeg...' : 'Load FFmpeg'}
-                    </button>
-                )}
-
                 {/* Error Display */}
                 {error && (
                     <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
@@ -307,51 +229,14 @@ export default function VideoProcessor() {
                     </button>
                 )}
 
-                {/* Processing Mode Selection */}
-                {ffmpegLoaded && selectedFile && !error && transcriptionResult && (
-                    <div className="mb-4">
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            Processing Mode
-                        </label>
-                        <div className="grid grid-cols-2 gap-3">
-                            <button
-                                onClick={() => setProcessingMode('embedded')}
-                                className={`p-3 rounded-lg border-2 transition-colors ${
-                                    processingMode === 'embedded'
-                                        ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
-                                        : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
-                                }`}
-                            >
-                                <div className="text-sm font-medium">⚡ Embedded Subtitles</div>
-                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                    Ultra fast, can be toggled on/off
-                                </div>
-                            </button>
-                            <button
-                                onClick={() => setProcessingMode('burned')}
-                                className={`p-3 rounded-lg border-2 transition-colors ${
-                                    processingMode === 'burned'
-                                        ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300'
-                                        : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
-                                }`}
-                            >
-                                <div className="text-sm font-medium">🔥 Burned-in Captions</div>
-                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                    Slower, always visible
-                                </div>
-                            </button>
-                        </div>
-                    </div>
-                )}
-
                 {/* Process Video with Captions Button */}
-                {ffmpegLoaded && selectedFile && !error && transcriptionResult && (
+                {selectedFile && !error && transcriptionResult && (
                     <button
                         onClick={processVideoWithCaptions}
                         disabled={isLoading}
                         className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-3 px-4 rounded-lg transition-colors"
                     >
-                        {isLoading ? `Adding Captions (${processingMode} mode)...` : `Create Video with Captions (${processingMode} mode)`}
+                        {isLoading ? 'Embedding Captions...' : '⚡ Add Captions to Video (Fast)'}
                     </button>
                 )}
             </div>
@@ -426,11 +311,6 @@ export default function VideoProcessor() {
                                 <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">
                                     {step.name}
                                 </span>
-                                {step.status === 'processing' && step.progress && (
-                                    <span className="text-sm text-blue-600 dark:text-blue-400">
-                                        {step.progress}%
-                                    </span>
-                                )}
                                 {step.status === 'completed' && (
                                     <span className="text-sm text-green-600 dark:text-green-400">✓</span>
                                 )}
@@ -479,15 +359,6 @@ export default function VideoProcessor() {
                         >
                             Download SRT File
                         </button>
-                        {!ffmpegLoaded && (
-                            <button
-                                onClick={loadFFmpeg}
-                                disabled={isLoading}
-                                className="bg-orange-600 hover:bg-orange-700 disabled:bg-orange-400 text-white font-medium py-2 px-4 rounded-lg transition-colors"
-                            >
-                                {isLoading ? 'Loading FFmpeg...' : 'Load FFmpeg to Burn Captions'}
-                            </button>
-                        )}
                     </div>
                 </div>
             )}

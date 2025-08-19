@@ -11,7 +11,7 @@ export default function Home() {
             AI Auto Caption Generator
           </h1>
           <p className="text-lg text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
-            Upload your videos and automatically generate accurate captions using Google's Gemini 2.5 Flash AI model.
+            Upload your videos and automatically generate accurate captions using Google&apos;s Gemini 2.5 Flash AI model.
             Support for videos up to 30 minutes and 1GB in size. Download SRT files or videos with burned-in captions.
           </p>
         </header>
