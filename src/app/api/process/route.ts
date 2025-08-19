@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, unlink, mkdir } from 'fs/promises';
+import { writeFile, unlink, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData();
     const file = formData.get('video') as File;
+    const srtContent = formData.get('srtContent') as string | null;
     
     if (!file) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
@@ -31,43 +32,79 @@ export async function POST(request: NextRequest) {
     // Save uploaded file
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    const filename = `${Date.now()}-${file.name}`;
+    const uniquePrefix = `${Date.now()}`;
+    const filename = `${uniquePrefix}-${file.name}`;
     const inputPath = path.join(uploadsDir, filename);
     const outputPath = path.join(outputDir, `processed-${filename}`);
+    let srtPath: string | null = null;
 
     await writeFile(inputPath, buffer);
 
+    if (srtContent) {
+      srtPath = path.join(uploadsDir, `${uniquePrefix}.srt`);
+      await writeFile(srtPath, srtContent);
+    }
+
     // Process with FFmpeg
-    return new Promise((resolve) => {
-      ffmpeg(inputPath)
-        .outputOptions([
+    return new Promise<NextResponse>((resolve) => {
+      const command = ffmpeg(inputPath);
+
+      if (srtPath) {
+        // Embed subtitles (muxing), which is much faster than burning
+        command
+          .input(srtPath) // Add SRT file as an input
+          .outputOptions([
+            '-c', 'copy', // Copy all streams (video, audio)
+            '-c:s', 'mov_text', // Encode subtitles to mov_text for MP4
+            '-metadata:s:s:0', 'language=eng', // Set subtitle language
+            '-disposition:s:0', 'default', // Make subtitles default
+            '-movflags', '+faststart',
+          ]);
+      } else {
+        // Fallback to original processing if no SRT is provided
+        command.outputOptions([
           '-c:v libx264',
           '-crf 28',
           '-preset fast',
           '-c:a aac',
           '-b:a 128k'
-        ])
+        ]);
+      }
+
+      command
         .on('start', (commandLine) => {
           console.log('Spawned FFmpeg with command: ' + commandLine);
         })
         .on('progress', (progress) => {
-          console.log('Processing: ' + progress.percent + '% done');
+          // This can be used to implement progress tracking if needed
+          console.log('Processing: ' + (progress.percent ?? 0).toFixed(2) + '% done');
         })
         .on('end', async () => {
           try {
-            // Clean up input file
+            // Read the processed file
+            const processedVideoBuffer = await readFile(outputPath);
+
+            // Clean up files
             await unlink(inputPath);
+            await unlink(outputPath);
+            if (srtPath) {
+              await unlink(srtPath);
+            }
             
-            // Return success response
-            resolve(NextResponse.json({ 
-              success: true, 
-              message: 'Video processed successfully',
-              outputPath: outputPath
+            // Return the processed video as a blob
+            const uint8Array = new Uint8Array(processedVideoBuffer);
+            resolve(new NextResponse(new Blob([uint8Array]), {
+              status: 200,
+              headers: {
+                'Content-Type': 'video/mp4',
+                'Content-Disposition': `attachment; filename="processed-${file.name}"`,
+              },
             }));
+
           } catch (error) {
-            console.error('Cleanup error:', error);
+            console.error('File handling error after processing:', error);
             resolve(NextResponse.json({ 
-              error: 'Processing completed but cleanup failed' 
+              error: 'Processing completed but failed to read/clean up files'
             }, { status: 500 }));
           }
         })
@@ -77,8 +114,10 @@ export async function POST(request: NextRequest) {
           // Clean up files on error
           try {
             await unlink(inputPath);
+            if (existsSync(outputPath)) await unlink(outputPath);
+            if (srtPath && existsSync(srtPath)) await unlink(srtPath);
           } catch (cleanupError) {
-            console.error('Cleanup error:', cleanupError);
+            console.error('Cleanup error after FFmpeg failure:', cleanupError);
           }
           
           resolve(NextResponse.json({ 
