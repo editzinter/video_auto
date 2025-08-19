@@ -24,6 +24,11 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const file = formData.get('video') as File;
     const srtContent = formData.get('srtContent') as string | null;
+    const fontName = formData.get('fontName') as string || 'DejaVu Sans';
+
+    // Validate font to prevent command injection
+    const allowedFonts = ['DejaVu Sans'];
+    const selectedFont = allowedFonts.includes(fontName) ? fontName : 'DejaVu Sans';
     
     if (!file) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
@@ -50,8 +55,9 @@ export async function POST(request: NextRequest) {
       const command = ffmpeg(inputPath);
 
       if (srtPath) {
+        const style = `force_style='Alignment=2,FontName=${selectedFont},FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`;
         command
-          .videoFilter(`subtitles=${srtPath}:force_style='Alignment=2,FontName=DejaVu Sans,FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`)
+          .videoFilter(`subtitles=${srtPath}:${style}`)
           .outputOptions([
             '-c:a', 'copy',
             '-c:v', 'libx264',
