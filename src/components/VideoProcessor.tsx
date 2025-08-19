@@ -21,6 +21,11 @@ export default function VideoProcessor() {
     const [error, setError] = useState<string | null>(null);
     const [transcriptionResult, setTranscriptionResult] = useState<TranscriptionResult | null>(null);
     const [isTranscribing, setIsTranscribing] = useState(false);
+    const [selectedFont, setSelectedFont] = useState('DejaVu Sans');
+
+    const fontOptions = [
+        { name: 'Modern Sans-serif', value: 'DejaVu Sans' },
+    ];
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -124,6 +129,7 @@ export default function VideoProcessor() {
             const formData = new FormData();
             formData.append('video', selectedFile);
             formData.append('srtContent', transcriptionResult.srt_content);
+            formData.append('fontName', selectedFont);
             addLog('Uploading video and captions to the server...');
             updateStep('upload', { status: 'completed' });
 
@@ -227,6 +233,32 @@ export default function VideoProcessor() {
                     >
                         {isTranscribing ? 'Generating Captions...' : 'Generate Auto Captions with AI'}
                     </button>
+                )}
+
+                {/* Font Selection */}
+                {selectedFile && !error && transcriptionResult && (
+                    <div className="mb-6">
+                        <label htmlFor="font-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Choose a Font Style
+                        </label>
+                        <select
+                            id="font-select"
+                            value={selectedFont}
+                            onChange={(e) => setSelectedFont(e.target.value)}
+                            className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                        >
+                            {fontOptions.map(font => (
+                                <option key={font.value} value={font.value}>
+                                    {font.name}
+                                </option>
+                            ))}
+                        </select>
+                        <div className="mt-4 p-4 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800">
+                            <p className="text-lg text-center text-gray-800 dark:text-gray-200" style={{ fontFamily: selectedFont, fontSize: '16px' }}>
+                                The quick brown fox jumps over the lazy dog.
+                            </p>
+                        </div>
+                    </div>
                 )}
 
                 {/* Process Video with Captions Button */}
