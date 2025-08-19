@@ -109,14 +109,14 @@ export default function VideoProcessor() {
 
         const steps: ProcessingStep[] = [
             { id: 'upload', name: 'Uploading to server', status: 'pending' },
-            { id: 'embed', name: 'Server embedding captions', status: 'pending' },
+            { id: 'burn', name: 'Server burning-in captions', status: 'pending' },
             { id: 'download', name: 'Downloading result', status: 'pending' },
             { id: 'complete', name: 'Processing complete', status: 'pending' },
         ];
 
         setProcessingSteps(steps);
         setIsLoading(true);
-        addLog('Starting server-side caption embedding...');
+        addLog('Starting server-side caption burning...');
 
         try {
             // Step 1: Uploading
@@ -128,8 +128,8 @@ export default function VideoProcessor() {
             updateStep('upload', { status: 'completed' });
 
             // Step 2: Processing on server
-            updateStep('embed', { status: 'processing' });
-            addLog('Server is now embedding captions into the video. This will be very fast!');
+            updateStep('burn', { status: 'processing' });
+            addLog('Server is now burning captions into the video. This may take a moment...');
             const response = await fetch('/api/process', {
                 method: 'POST',
                 body: formData,
@@ -139,7 +139,7 @@ export default function VideoProcessor() {
                 const errorData = await response.json();
                 throw new Error(errorData.error || 'Server processing failed');
             }
-            updateStep('embed', { status: 'completed' });
+            updateStep('burn', { status: 'completed' });
 
             // Step 3: Downloading result
             updateStep('download', { status: 'processing' });
@@ -151,7 +151,7 @@ export default function VideoProcessor() {
 
             // Step 4: Complete
             updateStep('complete', { status: 'completed' });
-            addLog('Video with embedded captions created successfully!');
+            addLog('Video with burned-in captions created successfully!');
 
         } catch (error) {
             console.error('Server processing failed:', error);
@@ -236,7 +236,7 @@ export default function VideoProcessor() {
                         disabled={isLoading}
                         className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-3 px-4 rounded-lg transition-colors"
                     >
-                        {isLoading ? 'Embedding Captions...' : '⚡ Add Captions to Video (Fast)'}
+                        {isLoading ? 'Adding Captions...' : '🔥 Add Captions to Video'}
                     </button>
                 )}
             </div>

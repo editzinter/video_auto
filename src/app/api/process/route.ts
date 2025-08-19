@@ -50,14 +50,13 @@ export async function POST(request: NextRequest) {
       const command = ffmpeg(inputPath);
 
       if (srtPath) {
-        // Embed subtitles (muxing), which is much faster than burning
         command
-          .input(srtPath) // Add SRT file as an input
+          .videoFilter(`subtitles=${srtPath}:force_style='Alignment=2,FontName=DejaVu Sans,FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`)
           .outputOptions([
-            '-c', 'copy', // Copy all streams (video, audio)
-            '-c:s', 'mov_text', // Encode subtitles to mov_text for MP4
-            '-metadata:s:s:0', 'language=eng', // Set subtitle language
-            '-disposition:s:0', 'default', // Make subtitles default
+            '-c:a', 'copy',
+            '-c:v', 'libx264',
+            '-crf', '28',
+            '-preset', 'ultrafast',
             '-movflags', '+faststart',
           ]);
       } else {
