@@ -24,11 +24,15 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const file = formData.get('video') as File;
     const srtContent = formData.get('srtContent') as string | null;
-    const fontName = formData.get('fontName') as string || 'DejaVu Sans';
+    const fontName = formData.get('fontName') as string || 'Roboto';
 
-    // Validate font to prevent command injection
-    const allowedFonts = ['DejaVu Sans'];
-    const selectedFont = allowedFonts.includes(fontName) ? fontName : 'DejaVu Sans';
+    // Validate font and get file path
+    const fontMap: { [key: string]: string } = {
+        'Roboto': path.join(process.cwd(), 'public', 'fonts', 'Roboto-Regular.ttf'),
+        'Lato': path.join(process.cwd(), 'public', 'fonts', 'Lato-Regular.ttf'),
+        'DejaVu Sans': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    };
+    const fontPath = fontMap[fontName] || fontMap['Roboto'];
     
     if (!file) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
@@ -55,7 +59,7 @@ export async function POST(request: NextRequest) {
       const command = ffmpeg(inputPath);
 
       if (srtPath) {
-        const style = `force_style='Alignment=2,FontName=${selectedFont},FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`;
+        const style = `force_style='Alignment=2,FontFile=${fontPath},FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`;
         command
           .videoFilter(`subtitles=${srtPath}:${style}`)
           .outputOptions([

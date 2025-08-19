@@ -25,6 +25,8 @@ export default function VideoProcessor() {
 
     const fontOptions = [
         { name: 'Modern Sans-serif', value: 'DejaVu Sans' },
+        { name: 'Elegant Serif', value: 'Roboto' },
+        { name: 'Casual Script', value: 'Lato' },
     ];
 
     const fileInputRef = useRef<HTMLInputElement>(null);
