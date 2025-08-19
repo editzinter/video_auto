@@ -21,12 +21,32 @@ export default function VideoProcessor() {
     const [error, setError] = useState<string | null>(null);
     const [transcriptionResult, setTranscriptionResult] = useState<TranscriptionResult | null>(null);
     const [isTranscribing, setIsTranscribing] = useState(false);
-    const [selectedFont, setSelectedFont] = useState('DejaVu Sans');
+    const [selectedFont, setSelectedFont] = useState('Roboto');
 
     const fontOptions = [
-        { name: 'Modern Sans-serif', value: 'DejaVu Sans' },
-        { name: 'Elegant Serif', value: 'Roboto' },
-        { name: 'Casual Script', value: 'Lato' },
+        { name: 'Default Sans-serif', value: 'DejaVu Sans' },
+        { name: 'Roboto', value: 'Roboto' },
+        { name: 'Lato', value: 'Lato' },
+        { name: 'Open Sans', value: 'Open Sans' },
+        { name: 'Montserrat', value: 'Montserrat' },
+        { name: 'Source Sans Pro', value: 'Source Sans Pro' },
+        { name: 'PT Sans', value: 'PT Sans' },
+        { name: 'Oswald', value: 'Oswald' },
+        { name: 'Merriweather', value: 'Merriweather' },
+        { name: 'Playfair Display', value: 'Playfair Display' },
+        { name: 'Nunito', value: 'Nunito' },
+        { name: 'Raleway', value: 'Raleway' },
+        { name: 'Poppins', value: 'Poppins' },
+        { name: 'Ubuntu', value: 'Ubuntu' },
+        { name: 'Noto Sans', value: 'Noto Sans' },
+        { name: 'Rubik', value: 'Rubik' },
+        { name: 'Work Sans', value: 'Work Sans' },
+        { name: 'Lobster', value: 'Lobster' },
+        { name: 'Pacifico', value: 'Pacifico' },
+        { name: 'Caveat', value: 'Caveat' },
+        { name: 'Indie Flower', value: 'Indie Flower' },
+        { name: 'Zilla Slab', value: 'Zilla Slab' },
+        { name: 'Arvo', value: 'Arvo' },
     ];
 
     const fileInputRef = useRef<HTMLInputElement>(null);
