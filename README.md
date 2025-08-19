@@ -1,36 +1,153 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI Video Processor
+
+A modern web application for video processing using FFmpeg in the browser and on the server. Built with Next.js, TypeScript, and Tailwind CSS.
+
+## Features
+
+- **Client-side video processing** using FFmpeg.wasm (WebAssembly)
+- **Server-side processing** with native FFmpeg for heavy operations
+- **Real-time progress tracking** with detailed logs
+- **Video compression** and format conversion
+- **Thumbnail extraction** from videos
+- **Privacy-focused** - client-side processing keeps data local
+- **Modern UI** with dark mode support
+
+## Tech Stack
+
+- **Frontend**: Next.js 15, React, TypeScript, Tailwind CSS
+- **Video Processing**: FFmpeg.wasm (client), fluent-ffmpeg (server)
+- **File Handling**: Native File API, multer for uploads
+
+## Prerequisites
+
+For server-side processing, you need FFmpeg installed on your system:
+
+### macOS
+```bash
+brew install ffmpeg
+```
+
+### Ubuntu/Debian
+```bash
+sudo apt update
+sudo apt install ffmpeg
+```
+
+### Windows
+Download from [FFmpeg official website](https://ffmpeg.org/download.html) or use chocolatey:
+```bash
+choco install ffmpeg
+```
 
 ## Getting Started
 
-First, run the development server:
-
+1. **Clone and install dependencies**:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone <your-repo>
+cd video-processor
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. **Run the development server**:
+```bash
+npm run dev
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. **Open your browser**:
+Navigate to [http://localhost:3000](http://localhost:3000)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Usage
 
-## Learn More
+### Client-side Processing (FFmpeg.wasm)
+1. Click "Load FFmpeg" to initialize the WebAssembly module
+2. Upload a video file (up to 100MB recommended)
+3. Click "Process Video" to start processing
+4. Watch real-time progress and logs
+5. Download the processed video
 
-To learn more about Next.js, take a look at the following resources:
+### Server-side Processing (API)
+The `/api/process` endpoint accepts video uploads for server-side processing:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```javascript
+const formData = new FormData();
+formData.append('video', videoFile);
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+const response = await fetch('/api/process', {
+  method: 'POST',
+  body: formData
+});
+```
 
-## Deploy on Vercel
+## Configuration
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Security Headers
+The app includes required security headers for WebAssembly:
+- `Cross-Origin-Opener-Policy: same-origin`
+- `Cross-Origin-Embedder-Policy: require-corp`
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### File Size Limits
+- Client-side: 100MB recommended (2GB WebAssembly limit)
+- Server-side: Configurable in API route
+
+## Processing Capabilities
+
+### Current Features
+- Video compression (H.264/AAC)
+- Thumbnail extraction
+- Format conversion
+- Video analysis
+
+### Planned Features
+- AI-powered video analysis
+- Automatic caption generation
+- B-roll integration
+- Advanced filters and effects
+
+## Development
+
+### Project Structure
+```
+src/
+├── app/
+│   ├── api/process/          # Server-side processing API
+│   ├── layout.tsx           # Root layout
+│   └── page.tsx             # Main page
+├── components/
+│   └── VideoProcessor.tsx   # Main video processing component
+```
+
+### Adding New Processing Features
+
+1. **Client-side**: Extend the `VideoProcessor` component
+2. **Server-side**: Add new API routes in `app/api/`
+
+## Troubleshooting
+
+### FFmpeg.wasm Issues
+- Ensure you're using HTTPS (required for WebAssembly)
+- Check browser compatibility (Chrome 94+, Firefox 118+)
+- Verify security headers are properly set
+
+### Server-side Issues
+- Confirm FFmpeg is installed and in PATH
+- Check file permissions for upload/output directories
+- Monitor server logs for detailed error messages
+
+## Browser Support
+
+- Chrome 94+
+- Firefox 118+
+- Edge 94+
+- Safari: Limited (no WebCodecs support)
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details# video_auto

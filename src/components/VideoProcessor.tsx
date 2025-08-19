@@ -1,0 +1,540 @@
+'use client';
+
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import { validateVideoFile, validateVideoDuration, formatFileSize, getVideoInfo, createVideoThumbnail, VideoInfo, formatDuration } from '@/utils/videoUtils';
+import { transcribeVideoWithGemini, downloadSRT, TranscriptionResult } from '@/lib/gemini';
+
+interface ProcessingStep {
+    id: string;
+    name: string;
+    status: 'pending' | 'processing' | 'completed' | 'error';
+    progress?: number;
+}
+
+export default function VideoProcessor() {
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+    const [processedVideoUrl, setProcessedVideoUrl] = useState<string | null>(null);
+    const [processingSteps, setProcessingSteps] = useState<ProcessingStep[]>([]);
+    const [logs, setLogs] = useState<string[]>([]);
+    const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
+    const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [transcriptionResult, setTranscriptionResult] = useState<TranscriptionResult | null>(null);
+    const [isTranscribing, setIsTranscribing] = useState(false);
+    const [processingMode, setProcessingMode] = useState<'embedded' | 'burned'>('embedded');
+
+    const ffmpegRef = useRef<FFmpeg | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const addLog = useCallback((message: string) => {
+        setLogs(prev => [...prev.slice(-9), `${new Date().toLocaleTimeString()}: ${message}`]);
+    }, []);
+
+    const updateStep = useCallback((id: string, updates: Partial<ProcessingStep>) => {
+        setProcessingSteps(prev =>
+            prev.map(step => step.id === id ? { ...step, ...updates } : step)
+        );
+    }, []);
+
+    const loadFFmpeg = useCallback(async () => {
+        if (ffmpegLoaded || ffmpegRef.current) return;
+
+        setIsLoading(true);
+        addLog('Loading FFmpeg...');
+
+        try {
+            const ffmpeg = new FFmpeg();
+
+            ffmpeg.on('log', ({ message }) => {
+                addLog(message);
+            });
+
+            ffmpeg.on('progress', ({ progress }) => {
+                const currentStep = processingSteps.find(step => step.status === 'processing');
+                if (currentStep) {
+                    updateStep(currentStep.id, { progress: Math.round(progress * 100) });
+                }
+            });
+
+            const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+            await ffmpeg.load({
+                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+            });
+
+            ffmpegRef.current = ffmpeg;
+            setFfmpegLoaded(true);
+            addLog('FFmpeg loaded successfully!');
+        } catch (error) {
+            console.error('Failed to load FFmpeg:', error);
+            addLog(`Failed to load FFmpeg: ${error}`);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [ffmpegLoaded, addLog, processingSteps, updateStep]);
+
+    const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        // Reset state
+        setError(null);
+        setVideoInfo(null);
+        setThumbnailUrl(null);
+        setProcessedVideoUrl(null);
+        setProcessingSteps([]);
+
+        // Validate file
+        const validation = validateVideoFile(file);
+        if (!validation.valid) {
+            setError(validation.error || 'Invalid file');
+            return;
+        }
+
+        setSelectedFile(file);
+        addLog(`Selected file: ${file.name} (${formatFileSize(file.size)})`);
+
+        // Get video info and thumbnail
+        try {
+            const [info, thumbnail] = await Promise.all([
+                getVideoInfo(file),
+                createVideoThumbnail(file)
+            ]);
+
+            setVideoInfo(info);
+            setThumbnailUrl(thumbnail);
+            addLog(`Video info: ${info.width}x${info.height}, ${info.duration.toFixed(1)}s`);
+        } catch (error) {
+            console.error('Failed to get video info:', error);
+            addLog('Warning: Could not extract video information');
+        }
+    };
+
+    const generateCaptions = async () => {
+        if (!selectedFile || !videoInfo) return;
+
+        // Validate duration before processing
+        const durationValidation = validateVideoDuration(videoInfo.duration);
+        if (!durationValidation.valid) {
+            setError(durationValidation.error || 'Video duration exceeds limit');
+            return;
+        }
+
+        setIsTranscribing(true);
+        setError(null);
+        addLog('Starting caption generation with Gemini 2.5 Flash...');
+
+        try {
+            const result = await transcribeVideoWithGemini(selectedFile, (progress) => {
+                addLog(`Transcription progress: ${progress}%`);
+            });
+
+            setTranscriptionResult(result);
+            addLog('Caption generation completed successfully!');
+            addLog(`Generated ${result.segments.length} caption segments`);
+        } catch (error) {
+            console.error('Caption generation failed:', error);
+            setError(`Caption generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            addLog(`Caption generation failed: ${error}`);
+        } finally {
+            setIsTranscribing(false);
+        }
+    };
+
+    const processVideoWithCaptions = async () => {
+        if (!selectedFile || !ffmpegRef.current || !transcriptionResult) return;
+
+        const steps: ProcessingStep[] = [
+            { id: 'upload', name: 'Uploading to memory', status: 'pending' },
+            { id: 'srt', name: 'Creating subtitle file', status: 'pending' },
+            { id: 'burn', name: 'Burning captions into video', status: 'pending' },
+            { id: 'complete', name: 'Processing complete', status: 'pending' },
+        ];
+
+        setProcessingSteps(steps);
+        setIsLoading(true);
+
+        try {
+            const ffmpeg = ffmpegRef.current;
+
+            // Step 1: Upload to memory
+            updateStep('upload', { status: 'processing' });
+            addLog('Writing video file to FFmpeg memory...');
+            await ffmpeg.writeFile('input.mp4', await fetchFile(selectedFile));
+            updateStep('upload', { status: 'completed' });
+
+            // Step 2: Create SRT file
+            updateStep('srt', { status: 'processing' });
+            addLog('Creating subtitle file...');
+            await ffmpeg.writeFile('captions.srt', transcriptionResult.srt_content);
+            updateStep('srt', { status: 'completed' });
+
+            // Step 3: Burn captions into video
+            updateStep('burn', { status: 'processing' });
+            addLog(`Burning captions into video (${processingMode} mode)...`);
+            
+            let ffmpegArgs: string[];
+
+            if (processingMode === 'embedded') {
+                // Use embedded subtitles - ultra fast processing
+                ffmpegArgs = [
+                    '-i', 'input.mp4',
+                    '-i', 'captions.srt',
+                    '-c:v', 'copy',  // Copy video stream without re-encoding
+                    '-c:a', 'copy',  // Copy audio stream without re-encoding
+                    '-c:s', 'mov_text',  // Add subtitle track
+                    '-metadata:s:s:0', 'language=eng',
+                    '-disposition:s:0', 'default',
+                    '-movflags', '+faststart',
+                    'output.mp4'
+                ];
+                addLog('Using embedded subtitles - ultra fast processing...');
+            } else {
+                // Burned-in captions - much slower but always visible
+                ffmpegArgs = [
+                    '-i', 'input.mp4',
+                    '-vf', `subtitles=captions.srt:force_style='FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`,
+                    '-c:a', 'copy',
+                    '-c:v', 'libx264',
+                    '-crf', '28',
+                    '-preset', 'ultrafast',
+                    '-movflags', '+faststart',
+                    'output.mp4'
+                ];
+                addLog('Using burned-in captions - slower but always visible...');
+            }
+
+            await ffmpeg.exec(ffmpegArgs);
+            updateStep('burn', { status: 'completed' });
+
+            // Step 4: Get processed video
+            updateStep('complete', { status: 'processing' });
+            const data = await ffmpeg.readFile('output.mp4');
+            const videoBlob = new Blob([data], { type: 'video/mp4' });
+            const videoUrl = URL.createObjectURL(videoBlob);
+
+            setProcessedVideoUrl(videoUrl);
+            updateStep('complete', { status: 'completed' });
+            addLog('Video with captions created successfully!');
+
+        } catch (error) {
+            console.error('Processing failed:', error);
+            addLog(`Processing failed: ${error}`);
+            const currentStep = processingSteps.find(step => step.status === 'processing');
+            if (currentStep) {
+                updateStep(currentStep.id, { status: 'error' });
+            }
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const downloadVideo = () => {
+        if (processedVideoUrl) {
+            const a = document.createElement('a');
+            a.href = processedVideoUrl;
+            a.download = 'processed-video.mp4';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    };
+
+    return (
+        <div className="max-w-4xl mx-auto">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
+                <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-4">
+                    Auto Caption Generation
+                </h2>
+
+                {/* File Upload */}
+                <div className="mb-6">
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="video/*"
+                        onChange={handleFileSelect}
+                        className="hidden"
+                    />
+                    <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full p-8 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg hover:border-blue-500 dark:hover:border-blue-400 transition-colors"
+                    >
+                        <div className="text-center">
+                            <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                                <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                                {selectedFile ? selectedFile.name : 'Click to upload a video file'}
+                            </p>
+                            <p className="text-xs text-gray-500 dark:text-gray-500">
+                                MP4, WebM, AVI up to 1GB • Max 30 minutes duration
+                            </p>
+                        </div>
+                    </button>
+                </div>
+
+                {/* FFmpeg Loading */}
+                {!ffmpegLoaded && (
+                    <button
+                        onClick={loadFFmpeg}
+                        disabled={isLoading}
+                        className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                    >
+                        {isLoading ? 'Loading FFmpeg...' : 'Load FFmpeg'}
+                    </button>
+                )}
+
+                {/* Error Display */}
+                {error && (
+                    <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                        <p className="text-red-700 dark:text-red-400 text-sm">{error}</p>
+                    </div>
+                )}
+
+                {/* Caption Generation Button */}
+                {selectedFile && !error && !transcriptionResult && (
+                    <button
+                        onClick={generateCaptions}
+                        disabled={isTranscribing}
+                        className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-medium py-3 px-4 rounded-lg transition-colors mb-4"
+                    >
+                        {isTranscribing ? 'Generating Captions...' : 'Generate Auto Captions with AI'}
+                    </button>
+                )}
+
+                {/* Processing Mode Selection */}
+                {ffmpegLoaded && selectedFile && !error && transcriptionResult && (
+                    <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Processing Mode
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                            <button
+                                onClick={() => setProcessingMode('embedded')}
+                                className={`p-3 rounded-lg border-2 transition-colors ${
+                                    processingMode === 'embedded'
+                                        ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                                        : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                                }`}
+                            >
+                                <div className="text-sm font-medium">⚡ Embedded Subtitles</div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                    Ultra fast, can be toggled on/off
+                                </div>
+                            </button>
+                            <button
+                                onClick={() => setProcessingMode('burned')}
+                                className={`p-3 rounded-lg border-2 transition-colors ${
+                                    processingMode === 'burned'
+                                        ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300'
+                                        : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                                }`}
+                            >
+                                <div className="text-sm font-medium">🔥 Burned-in Captions</div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                    Slower, always visible
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Process Video with Captions Button */}
+                {ffmpegLoaded && selectedFile && !error && transcriptionResult && (
+                    <button
+                        onClick={processVideoWithCaptions}
+                        disabled={isLoading}
+                        className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-3 px-4 rounded-lg transition-colors"
+                    >
+                        {isLoading ? `Adding Captions (${processingMode} mode)...` : `Create Video with Captions (${processingMode} mode)`}
+                    </button>
+                )}
+            </div>
+
+            {/* Video Info & Thumbnail */}
+            {selectedFile && videoInfo && !error && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                        Video Information
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* Thumbnail */}
+                        {thumbnailUrl && (
+                            <div>
+                                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                    Preview
+                                </h4>
+                                <img
+                                    src={thumbnailUrl}
+                                    alt="Video thumbnail"
+                                    className="w-full rounded-lg border border-gray-200 dark:border-gray-600"
+                                />
+                            </div>
+                        )}
+
+                        {/* Video Details */}
+                        <div>
+                            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                Details
+                            </h4>
+                            <div className="space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600 dark:text-gray-400">File name:</span>
+                                    <span className="text-gray-900 dark:text-white font-medium">{selectedFile.name}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600 dark:text-gray-400">File size:</span>
+                                    <span className="text-gray-900 dark:text-white">{formatFileSize(selectedFile.size)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600 dark:text-gray-400">Resolution:</span>
+                                    <span className="text-gray-900 dark:text-white">{videoInfo.width} × {videoInfo.height}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600 dark:text-gray-400">Duration:</span>
+                                    <span className="text-gray-900 dark:text-white">{videoInfo.duration.toFixed(1)}s</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600 dark:text-gray-400">Format:</span>
+                                    <span className="text-gray-900 dark:text-white">{videoInfo.format}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Processing Steps */}
+            {processingSteps.length > 0 && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                        Processing Steps
+                    </h3>
+                    <div className="space-y-3">
+                        {processingSteps.map((step) => (
+                            <div key={step.id} className="flex items-center space-x-3">
+                                <div className={`w-4 h-4 rounded-full flex-shrink-0 ${step.status === 'completed' ? 'bg-green-500' :
+                                    step.status === 'processing' ? 'bg-blue-500 animate-pulse' :
+                                        step.status === 'error' ? 'bg-red-500' :
+                                            'bg-gray-300'
+                                    }`} />
+                                <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">
+                                    {step.name}
+                                </span>
+                                {step.status === 'processing' && step.progress && (
+                                    <span className="text-sm text-blue-600 dark:text-blue-400">
+                                        {step.progress}%
+                                    </span>
+                                )}
+                                {step.status === 'completed' && (
+                                    <span className="text-sm text-green-600 dark:text-green-400">✓</span>
+                                )}
+                                {step.status === 'error' && (
+                                    <span className="text-sm text-red-600 dark:text-red-400">✗</span>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Generated Captions */}
+            {transcriptionResult && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                        Generated Captions
+                    </h3>
+                    <div className="mb-4">
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                            {transcriptionResult.segments.length} caption segments generated
+                        </p>
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 max-h-60 overflow-y-auto">
+                            {transcriptionResult.segments.slice(0, 5).map((segment, index) => (
+                                <div key={index} className="mb-3 last:mb-0">
+                                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+                                        {segment.start_time} → {segment.end_time}
+                                        {segment.speaker && ` • ${segment.speaker}`}
+                                    </div>
+                                    <div className="text-sm text-gray-900 dark:text-white">
+                                        {segment.text}
+                                    </div>
+                                </div>
+                            ))}
+                            {transcriptionResult.segments.length > 5 && (
+                                <div className="text-xs text-gray-500 dark:text-gray-400 text-center mt-3">
+                                    ... and {transcriptionResult.segments.length - 5} more segments
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <div className="flex gap-3">
+                        <button
+                            onClick={() => downloadSRT(transcriptionResult.srt_content, `${selectedFile?.name.replace(/\.[^/.]+$/, '')}_captions.srt`)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                        >
+                            Download SRT File
+                        </button>
+                        {!ffmpegLoaded && (
+                            <button
+                                onClick={loadFFmpeg}
+                                disabled={isLoading}
+                                className="bg-orange-600 hover:bg-orange-700 disabled:bg-orange-400 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                            >
+                                {isLoading ? 'Loading FFmpeg...' : 'Load FFmpeg to Burn Captions'}
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Results */}
+            {processedVideoUrl && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                        Video with Auto Captions
+                    </h3>
+                    <video
+                        src={processedVideoUrl}
+                        controls
+                        className="w-full rounded-lg mb-4"
+                    />
+                    <div className="flex gap-3">
+                        <button
+                            onClick={downloadVideo}
+                            className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                        >
+                            Download Video with Captions
+                        </button>
+                        {transcriptionResult && (
+                            <button
+                                onClick={() => downloadSRT(transcriptionResult.srt_content, `${selectedFile?.name.replace(/\.[^/.]+$/, '')}_captions.srt`)}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                            >
+                                Download SRT File
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Logs */}
+            {logs.length > 0 && (
+                <div className="bg-gray-900 rounded-lg p-4">
+                    <h3 className="text-lg font-semibold text-white mb-2">Processing Logs</h3>
+                    <div className="bg-black rounded p-3 h-40 overflow-y-auto">
+                        {logs.map((log, index) => (
+                            <div key={index} className="text-green-400 text-xs font-mono">
+                                {log}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
