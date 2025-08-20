@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { writeFile, unlink, mkdir, readFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, createWriteStream } from 'fs';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import { extractKeywordsFromTranscript, findBrollVideo } from '@/lib/b-roll';
+import axios from 'axios';
+import { Writable } from 'stream';
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -18,6 +20,22 @@ async function ensureDirectories() {
   }
 }
 
+async function downloadFile(url: string, destination: string): Promise<void> {
+  const writer = createWriteStream(destination);
+  const response = await axios({
+    url,
+    method: 'GET',
+    responseType: 'stream'
+  });
+
+  response.data.pipe(writer);
+
+  return new Promise((resolve, reject) => {
+    writer.on('finish', resolve);
+    writer.on('error', reject);
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     await ensureDirectories();
@@ -26,6 +44,7 @@ export async function POST(request: NextRequest) {
     const file = formData.get('video') as File;
     const srtContent = formData.get('srtContent') as string | null;
     const fontName = formData.get('fontName') as string || 'Roboto';
+    const addBroll = formData.get('addBroll') === 'true';
 
     if (!file) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
@@ -39,6 +58,7 @@ export async function POST(request: NextRequest) {
     const inputPath = path.join(uploadsDir, filename);
     const outputPath = path.join(outputDir, `processed-${filename}`);
     let srtPath: string | null = null;
+    let brollPath: string | null = null;
 
     await writeFile(inputPath, buffer);
 
@@ -46,8 +66,6 @@ export async function POST(request: NextRequest) {
       srtPath = path.join(uploadsDir, `${uniquePrefix}.srt`);
       await writeFile(srtPath, srtContent);
     }
-
-    const addBroll = formData.get('addBroll') === 'true';
 
     if (addBroll && srtContent) {
         console.log('B-roll generation enabled.');
@@ -58,7 +76,14 @@ export async function POST(request: NextRequest) {
             const brollVideoUrl = await findBrollVideo(keywords[0]);
             if (brollVideoUrl) {
                 console.log(`Found B-roll video to insert: ${brollVideoUrl}`);
-                // TODO: Download this video and add it to the ffmpeg command.
+                brollPath = path.join(uploadsDir, `${uniquePrefix}-broll.mp4`);
+                try {
+                  await downloadFile(brollVideoUrl, brollPath);
+                  console.log(`B-roll video downloaded to ${brollPath}`);
+                } catch (error) {
+                  console.error('Failed to download b-roll video:', error);
+                  brollPath = null; // a bit defensive
+                }
             }
         }
     }
@@ -67,53 +92,57 @@ export async function POST(request: NextRequest) {
     return new Promise<NextResponse>((resolve) => {
       const command = ffmpeg(inputPath);
 
+      if (brollPath) {
+        command.input(brollPath);
+      }
+
+      const complexFilter: string[] = [];
+      let videoStream = '[0:v]';
+      if (brollPath) {
+        // A simple example: overlay B-roll for 5 seconds in the middle of the video
+        // This is a complex topic. A real implementation would need to parse video durations.
+        // For now, we'll assume the main video is longer than 10s.
+        complexFilter.push('[1:v]scale=1280:720,setsar=1[broll_scaled]');
+        complexFilter.push(`${videoStream}[broll_scaled]overlay=0:0:enable='between(t,5,10)'[video_out]`);
+        videoStream = '[video_out]';
+      }
+
       if (srtPath) {
         const fontsDir = path.join(process.cwd(), 'public', 'fonts');
-        // Escape path for ffmpeg on windows by replacing backslashes with forward slashes, and escaping colons.
         const escapedFontsDir = fontsDir.replace(/\\/g, '/').replace(/:/g, '\\:');
         const style = `force_style='FontName=${fontName},FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`;
-        command
-          .videoFilter(`subtitles=${srtPath}:fontsdir=${escapedFontsDir}:${style}`)
-          .outputOptions([
-            '-c:a', 'copy',
-            '-c:v', 'libx264',
-            '-vsync', 'cfr',
-            '-crf', '28',
-            '-preset', 'ultrafast',
-            '-movflags', '+faststart',
-          ]);
-      } else {
-        // Fallback to original processing if no SRT is provided
-        command.outputOptions([
-          '-c:v libx264',
-          '-crf 28',
-          '-preset fast',
-          '-c:a aac',
-          '-b:a 128k'
-        ]);
+        complexFilter.push(`${videoStream}subtitles=${srtPath}:fontsdir=${escapedFontsDir}:${style}[video_final]`);
+        videoStream = '[video_final]';
       }
+
+      if (complexFilter.length > 0) {
+        command.complexFilter(complexFilter, videoStream.replace(/\[|\]/g, ''));
+      }
+
+      command.outputOptions([
+        '-c:a', 'copy',
+        '-c:v', 'libx264',
+        '-vsync', 'cfr',
+        '-crf', '28',
+        '-preset', 'ultrafast',
+        '-movflags', '+faststart',
+      ]);
 
       command
         .on('start', (commandLine) => {
           console.log('Spawned FFmpeg with command: ' + commandLine);
         })
         .on('progress', (progress) => {
-          // This can be used to implement progress tracking if needed
           console.log('Processing: ' + (progress.percent ?? 0).toFixed(2) + '% done');
         })
         .on('end', async () => {
           try {
-            // Read the processed file
             const processedVideoBuffer = await readFile(outputPath);
-
-            // Clean up files
             await unlink(inputPath);
             await unlink(outputPath);
-            if (srtPath) {
-              await unlink(srtPath);
-            }
+            if (srtPath) await unlink(srtPath);
+            if (brollPath) await unlink(brollPath);
             
-            // Return the processed video as a blob
             const uint8Array = new Uint8Array(processedVideoBuffer);
             resolve(new NextResponse(new Blob([uint8Array]), {
               status: 200,
@@ -132,12 +161,11 @@ export async function POST(request: NextRequest) {
         })
         .on('error', async (err) => {
           console.error('FFmpeg error:', err);
-          
-          // Clean up files on error
           try {
             await unlink(inputPath);
             if (existsSync(outputPath)) await unlink(outputPath);
             if (srtPath && existsSync(srtPath)) await unlink(srtPath);
+            if (brollPath && existsSync(brollPath)) await unlink(brollPath);
           } catch (cleanupError) {
             console.error('Cleanup error after FFmpeg failure:', cleanupError);
           }
@@ -165,7 +193,7 @@ export async function GET() {
   });
 }
 
-function parseSrt(srtContent: string) {
+function parseSrt(srtContent: string): { text: string }[] {
     const pattern = /(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n([\s\S]*?(?=\n\n|\n*$))/g;
     const segments = [];
     let match;
