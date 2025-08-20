@@ -75,12 +75,12 @@ Requirements:
     const text = response.text();
     
     // Parse the JSON response
-    let transcriptionData: GeminiTranscriptionResponse;
+    let transcriptionData;
     try {
       // Clean the response text to extract JSON
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        transcriptionData = parseLenientJSON(jsonMatch[0]);
+        transcriptionData = JSON.parse(jsonMatch[0]);
       } else {
         throw new Error('No JSON found in response');
       }
@@ -121,27 +121,9 @@ ${segment.text}
 }
 
 function formatSRTTime(timeStr: string): string {
-  // Convert HH:MM:SS or HH:MM:SS.ms to HH:MM:SS,ms format for SRT
-  let time = timeStr.replace('.', ',');
-  if (!time.includes(',')) {
-    time += ',000';
-  }
-  return time;
-}
-
-interface GeminiTranscriptionResponse {
-  segments: CaptionSegment[];
-}
-
-function parseLenientJSON(jsonString: string): GeminiTranscriptionResponse {
-  // Attempt to fix missing commas between properties that are on new lines
-  const fixedJsonString = jsonString.replace(/"\s*\n\s*"/g, '",\n"');
-  try {
-    return JSON.parse(fixedJsonString) as GeminiTranscriptionResponse;
-  } catch (error) {
-    console.error("Failed to parse even after attempting to fix JSON:", fixedJsonString);
-    throw error;
-  }
+  // Convert HH:MM:SS to HH:MM:SS,000 format for SRT
+  if (timeStr.includes(',')) return timeStr;
+  return timeStr + ',000';
 }
 
 export function downloadSRT(srtContent: string, filename: string = 'captions.srt') {

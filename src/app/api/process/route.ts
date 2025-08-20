@@ -27,34 +27,6 @@ export async function POST(request: NextRequest) {
     const srtContent = formData.get('srtContent') as string | null;
     const fontName = formData.get('fontName') as string || 'Roboto';
 
-    // Validate font and get file path
-    const fontMap: { [key: string]: string } = {
-        'Roboto': path.join(process.cwd(), 'public', 'fonts', 'Roboto-Regular.ttf'),
-        'Lato': path.join(process.cwd(), 'public', 'fonts', 'Lato-Regular.ttf'),
-        'DejaVu Sans': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        'Open Sans': path.join(process.cwd(), 'public', 'fonts', 'OpenSans-Regular.ttf'),
-        'Montserrat': path.join(process.cwd(), 'public', 'fonts', 'Montserrat-Regular.ttf'),
-        'Source Sans Pro': path.join(process.cwd(), 'public', 'fonts', 'SourceSansPro-Regular.ttf'),
-        'PT Sans': path.join(process.cwd(), 'public', 'fonts', 'PTSans-Regular.ttf'),
-        'Oswald': path.join(process.cwd(), 'public', 'fonts', 'Oswald-Regular.ttf'),
-        'Merriweather': path.join(process.cwd(), 'public', 'fonts', 'Merriweather-Regular.ttf'),
-        'Playfair Display': path.join(process.cwd(), 'public', 'fonts', 'PlayfairDisplay-Regular.ttf'),
-        'Nunito': path.join(process.cwd(), 'public', 'fonts', 'Nunito-Regular.ttf'),
-        'Raleway': path.join(process.cwd(), 'public', 'fonts', 'Raleway-Regular.ttf'),
-        'Poppins': path.join(process.cwd(), 'public', 'fonts', 'Poppins-Regular.ttf'),
-        'Ubuntu': path.join(process.cwd(), 'public', 'fonts', 'Ubuntu-Regular.ttf'),
-        'Noto Sans': path.join(process.cwd(), 'public', 'fonts', 'NotoSans-Regular.ttf'),
-        'Rubik': path.join(process.cwd(), 'public', 'fonts', 'Rubik-Regular.ttf'),
-        'Work Sans': path.join(process.cwd(), 'public', 'fonts', 'WorkSans-Regular.ttf'),
-        'Lobster': path.join(process.cwd(), 'public', 'fonts', 'Lobster-Regular.ttf'),
-        'Pacifico': path.join(process.cwd(), 'public', 'fonts', 'Pacifico-Regular.ttf'),
-        'Caveat': path.join(process.cwd(), 'public', 'fonts', 'Caveat-Regular.ttf'),
-        'Indie Flower': path.join(process.cwd(), 'public', 'fonts', 'IndieFlower-Regular.ttf'),
-        'Zilla Slab': path.join(process.cwd(), 'public', 'fonts', 'ZillaSlab-Regular.ttf'),
-        'Arvo': path.join(process.cwd(), 'public', 'fonts', 'Arvo-Regular.ttf'),
-    };
-    const fontPath = fontMap[fontName] || fontMap['Roboto'];
-    
     if (!file) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
     }
@@ -96,9 +68,12 @@ export async function POST(request: NextRequest) {
       const command = ffmpeg(inputPath);
 
       if (srtPath) {
-        const style = `force_style='Alignment=2,FontFile=${fontPath},FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`;
+        const fontsDir = path.join(process.cwd(), 'public', 'fonts');
+        // Escape path for ffmpeg on windows by replacing backslashes with forward slashes, and escaping colons.
+        const escapedFontsDir = fontsDir.replace(/\\/g, '/').replace(/:/g, '\\:');
+        const style = `force_style='FontName=${fontName},FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`;
         command
-          .videoFilter(`subtitles=${srtPath}:${style}`)
+          .videoFilter(`subtitles=${srtPath}:fontsdir=${escapedFontsDir}:${style}`)
           .outputOptions([
             '-c:a', 'copy',
             '-c:v', 'libx264',

@@ -8,6 +8,7 @@ interface ProcessingStep {
     id: string;
     name: string;
     status: 'pending' | 'processing' | 'completed' | 'error';
+    progress?: number;
 }
 
 export default function VideoProcessor() {
@@ -22,32 +23,12 @@ export default function VideoProcessor() {
     const [transcriptionResult, setTranscriptionResult] = useState<TranscriptionResult | null>(null);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [selectedFont, setSelectedFont] = useState('Roboto');
-    const [addBroll, setAddBroll] = useState(false);
 
-    const fontOptions = [
-        { name: 'Default Sans-serif', value: 'DejaVu Sans' },
-        { name: 'Roboto', value: 'Roboto' },
-        { name: 'Lato', value: 'Lato' },
-        { name: 'Open Sans', value: 'Open Sans' },
-        { name: 'Montserrat', value: 'Montserrat' },
-        { name: 'Source Sans Pro', value: 'Source Sans Pro' },
-        { name: 'PT Sans', value: 'PT Sans' },
-        { name: 'Oswald', value: 'Oswald' },
-        { name: 'Merriweather', value: 'Merriweather' },
-        { name: 'Playfair Display', value: 'Playfair Display' },
-        { name: 'Nunito', value: 'Nunito' },
-        { name: 'Raleway', value: 'Raleway' },
-        { name: 'Poppins', value: 'Poppins' },
-        { name: 'Ubuntu', value: 'Ubuntu' },
-        { name: 'Noto Sans', value: 'Noto Sans' },
-        { name: 'Rubik', value: 'Rubik' },
-        { name: 'Work Sans', value: 'Work Sans' },
-        { name: 'Lobster', value: 'Lobster' },
-        { name: 'Pacifico', value: 'Pacifico' },
-        { name: 'Caveat', value: 'Caveat' },
-        { name: 'Indie Flower', value: 'Indie Flower' },
-        { name: 'Zilla Slab', value: 'Zilla Slab' },
-        { name: 'Arvo', value: 'Arvo' },
+    const fonts = [
+        'Roboto', 'Lato', 'DejaVu Sans', 'Open Sans', 'Montserrat',
+        'Source Sans Pro', 'PT Sans', 'Oswald', 'Merriweather', 'Playfair Display',
+        'Nunito', 'Raleway', 'Poppins', 'Ubuntu', 'Noto Sans', 'Rubik', 'Work Sans',
+        'Lobster', 'Pacifico', 'Caveat', 'Indie Flower', 'Zilla Slab', 'Arvo'
     ];
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -62,6 +43,59 @@ export default function VideoProcessor() {
         );
     }, []);
 
+    const processVideoWithServer = async () => {
+        if (!selectedFile || !transcriptionResult) return;
+
+        const formData = new FormData();
+        formData.append('video', selectedFile);
+        formData.append('srtContent', transcriptionResult.srt_content);
+        formData.append('fontName', selectedFont);
+
+        const steps: ProcessingStep[] = [
+            { id: 'upload', name: 'Uploading to server', status: 'pending' },
+            { id: 'process', name: 'Processing video', status: 'pending' },
+            { id: 'complete', name: 'Processing complete', status: 'pending' },
+        ];
+
+        setProcessingSteps(steps);
+        setIsLoading(true);
+        updateStep('upload', { status: 'processing' });
+        addLog('Uploading video to server...');
+
+        try {
+            const response = await fetch('/api/process', {
+                method: 'POST',
+                body: formData,
+            });
+
+            updateStep('upload', { status: 'completed' });
+            updateStep('process', { status: 'processing' });
+            addLog('Video uploaded, starting processing...');
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Processing failed');
+            }
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            setProcessedVideoUrl(url);
+            updateStep('process', { status: 'completed' });
+            updateStep('complete', { status: 'completed' });
+            addLog('Video with captions created successfully!');
+
+        } catch (error) {
+            console.error('Processing failed:', error);
+            addLog(`Processing failed: ${error}`);
+            const currentStep = processingSteps.find(step => step.status === 'processing');
+            if (currentStep) {
+                updateStep(currentStep.id, { status: 'error' });
+            }
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
@@ -72,8 +106,6 @@ export default function VideoProcessor() {
         setThumbnailUrl(null);
         setProcessedVideoUrl(null);
         setProcessingSteps([]);
-        setTranscriptionResult(null);
-        setLogs([]);
 
         // Validate file
         const validation = validateVideoFile(file);
@@ -129,70 +161,6 @@ export default function VideoProcessor() {
             addLog(`Caption generation failed: ${error}`);
         } finally {
             setIsTranscribing(false);
-        }
-    };
-
-    const processVideoWithCaptions = async () => {
-        if (!selectedFile || !transcriptionResult) return;
-
-        const steps: ProcessingStep[] = [
-            { id: 'upload', name: 'Uploading to server', status: 'pending' },
-            { id: 'burn', name: 'Server burning-in captions', status: 'pending' },
-            { id: 'download', name: 'Downloading result', status: 'pending' },
-            { id: 'complete', name: 'Processing complete', status: 'pending' },
-        ];
-
-        setProcessingSteps(steps);
-        setIsLoading(true);
-        addLog('Starting server-side caption burning...');
-
-        try {
-            // Step 1: Uploading
-            updateStep('upload', { status: 'processing' });
-            const formData = new FormData();
-            formData.append('video', selectedFile);
-            formData.append('srtContent', transcriptionResult.srt_content);
-            formData.append('fontName', selectedFont);
-            formData.append('addBroll', String(addBroll));
-            addLog('Uploading video and captions to the server...');
-            updateStep('upload', { status: 'completed' });
-
-            // Step 2: Processing on server
-            updateStep('burn', { status: 'processing' });
-            addLog('Server is now burning captions into the video. This may take a moment...');
-            const response = await fetch('/api/process', {
-                method: 'POST',
-                body: formData,
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || 'Server processing failed');
-            }
-            updateStep('burn', { status: 'completed' });
-
-            // Step 3: Downloading result
-            updateStep('download', { status: 'processing' });
-            addLog('Downloading processed video from server...');
-            const videoBlob = await response.blob();
-            const videoUrl = URL.createObjectURL(videoBlob);
-            setProcessedVideoUrl(videoUrl);
-            updateStep('download', { status: 'completed' });
-
-            // Step 4: Complete
-            updateStep('complete', { status: 'completed' });
-            addLog('Video with burned-in captions created successfully!');
-
-        } catch (error) {
-            console.error('Server processing failed:', error);
-            addLog(`Server-side processing failed: ${error}`);
-            setError(`Server-side processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-            const currentStep = processingSteps.find(step => step.status === 'processing');
-            if (currentStep) {
-                updateStep(currentStep.id, { status: 'error' });
-            }
-        } finally {
-            setIsLoading(false);
         }
     };
 
@@ -261,9 +229,9 @@ export default function VideoProcessor() {
 
                 {/* Font Selection */}
                 {selectedFile && !error && transcriptionResult && (
-                    <div className="mb-6">
+                    <div className="mb-4">
                         <label htmlFor="font-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            Choose a Font Style
+                            Caption Font
                         </label>
                         <select
                             id="font-select"
@@ -271,45 +239,21 @@ export default function VideoProcessor() {
                             onChange={(e) => setSelectedFont(e.target.value)}
                             className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                         >
-                            {fontOptions.map(font => (
-                                <option key={font.value} value={font.value}>
-                                    {font.name}
-                                </option>
+                            {fonts.map(font => (
+                                <option key={font} value={font}>{font}</option>
                             ))}
                         </select>
-                        <div className="mt-4 p-4 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800">
-                            <p className="text-lg text-center text-gray-800 dark:text-gray-200" style={{ fontFamily: selectedFont, fontSize: '16px' }}>
-                                The quick brown fox jumps over the lazy dog.
-                            </p>
-                        </div>
-                    </div>
-                )}
-
-                {/* B-roll Checkbox */}
-                {selectedFile && !error && transcriptionResult && (
-                    <div className="mb-6">
-                        <label className="flex items-center space-x-3 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={addBroll}
-                                onChange={(e) => setAddBroll(e.target.checked)}
-                                className="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                            />
-                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                                Automatically Add B-roll (Experimental)
-                            </span>
-                        </label>
                     </div>
                 )}
 
                 {/* Process Video with Captions Button */}
                 {selectedFile && !error && transcriptionResult && (
                     <button
-                        onClick={processVideoWithCaptions}
+                        onClick={processVideoWithServer}
                         disabled={isLoading}
                         className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-3 px-4 rounded-lg transition-colors"
                     >
-                        {isLoading ? 'Adding Captions...' : '🔥 Add Captions to Video'}
+                        {isLoading ? `Adding Captions...` : `Create Video with Captions`}
                     </button>
                 )}
             </div>
@@ -327,6 +271,7 @@ export default function VideoProcessor() {
                                 <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                     Preview
                                 </h4>
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img
                                     src={thumbnailUrl}
                                     alt="Video thumbnail"
@@ -384,6 +329,11 @@ export default function VideoProcessor() {
                                 <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">
                                     {step.name}
                                 </span>
+                                {step.status === 'processing' && step.progress && (
+                                    <span className="text-sm text-blue-600 dark:text-blue-400">
+                                        {step.progress}%
+                                    </span>
+                                )}
                                 {step.status === 'completed' && (
                                     <span className="text-sm text-green-600 dark:text-green-400">✓</span>
                                 )}
