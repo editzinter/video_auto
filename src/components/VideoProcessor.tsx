@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { validateVideoFile, validateVideoDuration, formatFileSize, getVideoInfo, createVideoThumbnail, VideoInfo } from '@/utils/videoUtils';
 import { transcribeVideoWithGemini, downloadSRT, TranscriptionResult } from '@/lib/gemini';
 
@@ -22,7 +22,10 @@ export default function VideoProcessor() {
     const [error, setError] = useState<string | null>(null);
     const [transcriptionResult, setTranscriptionResult] = useState<TranscriptionResult | null>(null);
     const [isTranscribing, setIsTranscribing] = useState(false);
+
+    // --- Settings State ---
     const [selectedFont, setSelectedFont] = useState('Roboto');
+    const [addBroll, setAddBroll] = useState(false);
 
     const fonts = [
         'Roboto', 'Lato', 'DejaVu Sans', 'Open Sans', 'Montserrat',
@@ -32,6 +35,14 @@ export default function VideoProcessor() {
     ];
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        const fontQuery = fonts.map(f => `family=${f.replace(/ /g, '+')}`).join('&');
+        const link = document.createElement('link');
+        link.href = `https://fonts.googleapis.com/css2?${fontQuery}&display=swap`;
+        link.rel = 'stylesheet';
+        document.head.appendChild(link);
+    }, [fonts]);
 
     const addLog = useCallback((message: string) => {
         setLogs(prev => [...prev.slice(-9), `${new Date().toLocaleTimeString()}: ${message}`]);
@@ -50,6 +61,7 @@ export default function VideoProcessor() {
         formData.append('video', selectedFile);
         formData.append('srtContent', transcriptionResult.srt_content);
         formData.append('fontName', selectedFont);
+        formData.append('addBroll', String(addBroll));
 
         const steps: ProcessingStep[] = [
             { id: 'upload', name: 'Uploading to server', status: 'pending' },
@@ -106,6 +118,7 @@ export default function VideoProcessor() {
         setThumbnailUrl(null);
         setProcessedVideoUrl(null);
         setProcessingSteps([]);
+        setTranscriptionResult(null);
 
         // Validate file
         const validation = validateVideoFile(file);
@@ -175,146 +188,118 @@ export default function VideoProcessor() {
         }
     };
 
-    return (
-        <div className="max-w-4xl mx-auto">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
-                <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-4">
-                    Auto Caption Generation
+    const LeftColumn = () => (
+        <div className="space-y-6">
+            {/* File Upload */}
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
+                    1. Upload Video
                 </h2>
-
-                {/* File Upload */}
-                <div className="mb-6">
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="video/*"
-                        onChange={handleFileSelect}
-                        className="hidden"
-                    />
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="w-full p-8 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg hover:border-blue-500 dark:hover:border-blue-400 transition-colors"
-                    >
-                        <div className="text-center">
-                            <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-                                <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                            <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                                {selectedFile ? selectedFile.name : 'Click to upload a video file'}
-                            </p>
-                            <p className="text-xs text-gray-500 dark:text-gray-500">
-                                MP4, WebM, AVI up to 1GB • Max 30 minutes duration
-                            </p>
-                        </div>
-                    </button>
-                </div>
-
-                {/* Error Display */}
-                {error && (
-                    <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                        <p className="text-red-700 dark:text-red-400 text-sm">{error}</p>
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="video/*"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                />
+                <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full p-8 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg hover:border-blue-500 dark:hover:border-blue-400 transition-colors"
+                >
+                    <div className="text-center">
+                        <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                            <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                            {selectedFile ? selectedFile.name : 'Click to upload a video file'}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-500">
+                            MP4, WebM, AVI up to 1GB • Max 30 minutes duration
+                        </p>
                     </div>
-                )}
-
-                {/* Caption Generation Button */}
-                {selectedFile && !error && !transcriptionResult && (
-                    <button
-                        onClick={generateCaptions}
-                        disabled={isTranscribing}
-                        className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-medium py-3 px-4 rounded-lg transition-colors mb-4"
-                    >
-                        {isTranscribing ? 'Generating Captions...' : 'Generate Auto Captions with AI'}
-                    </button>
-                )}
-
-                {/* Font Selection */}
-                {selectedFile && !error && transcriptionResult && (
-                    <div className="mb-4">
-                        <label htmlFor="font-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            Caption Font
-                        </label>
-                        <select
-                            id="font-select"
-                            value={selectedFont}
-                            onChange={(e) => setSelectedFont(e.target.value)}
-                            className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                        >
-                            {fonts.map(font => (
-                                <option key={font} value={font}>{font}</option>
-                            ))}
-                        </select>
-                    </div>
-                )}
-
-                {/* Process Video with Captions Button */}
-                {selectedFile && !error && transcriptionResult && (
-                    <button
-                        onClick={processVideoWithServer}
-                        disabled={isLoading}
-                        className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-3 px-4 rounded-lg transition-colors"
-                    >
-                        {isLoading ? `Adding Captions...` : `Create Video with Captions`}
-                    </button>
-                )}
+                </button>
             </div>
 
-            {/* Video Info & Thumbnail */}
-            {selectedFile && videoInfo && !error && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                        Video Information
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Thumbnail */}
-                        {thumbnailUrl && (
-                            <div>
-                                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                                    Preview
-                                </h4>
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                    src={thumbnailUrl}
-                                    alt="Video thumbnail"
-                                    className="w-full rounded-lg border border-gray-200 dark:border-gray-600"
-                                />
-                            </div>
-                        )}
+            {/* Error Display */}
+            {error && (
+                <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                    <p className="text-red-700 dark:text-red-400 text-sm">{error}</p>
+                </div>
+            )}
 
-                        {/* Video Details */}
-                        <div>
-                            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                                Details
-                            </h4>
-                            <div className="space-y-2 text-sm">
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600 dark:text-gray-400">File name:</span>
-                                    <span className="text-gray-900 dark:text-white font-medium">{selectedFile.name}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600 dark:text-gray-400">File size:</span>
-                                    <span className="text-gray-900 dark:text-white">{formatFileSize(selectedFile.size)}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600 dark:text-gray-400">Resolution:</span>
-                                    <span className="text-gray-900 dark:text-white">{videoInfo.width} × {videoInfo.height}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600 dark:text-gray-400">Duration:</span>
-                                    <span className="text-gray-900 dark:text-white">{videoInfo.duration.toFixed(1)}s</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600 dark:text-gray-400">Format:</span>
-                                    <span className="text-gray-900 dark:text-white">{videoInfo.format}</span>
+            {/* Actions */}
+            {selectedFile && !error && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
+                        2. AI Tools
+                    </h2>
+
+                    {!transcriptionResult ? (
+                        <button
+                            onClick={generateCaptions}
+                            disabled={isTranscribing}
+                            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-medium py-3 px-4 rounded-lg transition-colors"
+                        >
+                            {isTranscribing ? 'Generating Captions...' : 'Generate Auto Captions'}
+                        </button>
+                    ) : (
+                        <div className='space-y-4'>
+                            {/* Settings */}
+                            <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
+                                    Settings
+                                </h3>
+                                <div className="space-y-4">
+                                    {/* Font Selection */}
+                                    <div>
+                                        <label htmlFor="font-select" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                            Caption Font
+                                        </label>
+                                        <select
+                                            id="font-select"
+                                            value={selectedFont}
+                                            onChange={(e) => setSelectedFont(e.target.value)}
+                                            className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                            style={{ fontFamily: selectedFont }}
+                                        >
+                                            {fonts.map(font => (
+                                                <option key={font} value={font} style={{ fontFamily: font }}>
+                                                    {font}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    {/* B-Roll Checkbox */}
+                                    <div>
+                                        <label htmlFor="broll-checkbox" className="flex items-center space-x-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                                            <input
+                                                type="checkbox"
+                                                id="broll-checkbox"
+                                                checked={addBroll}
+                                                onChange={(e) => setAddBroll(e.target.checked)}
+                                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                            />
+                                            <span>Add Automatic B-roll (Experimental)</span>
+                                        </label>
+                                    </div>
                                 </div>
                             </div>
+
+                            <button
+                                onClick={processVideoWithServer}
+                                disabled={isLoading}
+                                className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-3 px-4 rounded-lg transition-colors"
+                            >
+                                {isLoading ? `Adding Captions...` : `Create Video with Captions`}
+                            </button>
                         </div>
-                    </div>
+                    )}
                 </div>
             )}
 
             {/* Processing Steps */}
             {processingSteps.length > 0 && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                         Processing Steps
                     </h3>
@@ -329,11 +314,6 @@ export default function VideoProcessor() {
                                 <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">
                                     {step.name}
                                 </span>
-                                {step.status === 'processing' && step.progress && (
-                                    <span className="text-sm text-blue-600 dark:text-blue-400">
-                                        {step.progress}%
-                                    </span>
-                                )}
                                 {step.status === 'completed' && (
                                     <span className="text-sm text-green-600 dark:text-green-400">✓</span>
                                 )}
@@ -342,76 +322,6 @@ export default function VideoProcessor() {
                                 )}
                             </div>
                         ))}
-                    </div>
-                </div>
-            )}
-
-            {/* Generated Captions */}
-            {transcriptionResult && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                        Generated Captions
-                    </h3>
-                    <div className="mb-4">
-                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                            {transcriptionResult.segments.length} caption segments generated
-                        </p>
-                        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 max-h-60 overflow-y-auto">
-                            {transcriptionResult.segments.slice(0, 5).map((segment, index) => (
-                                <div key={index} className="mb-3 last:mb-0">
-                                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-                                        {segment.start_time} → {segment.end_time}
-                                        {segment.speaker && ` • ${segment.speaker}`}
-                                    </div>
-                                    <div className="text-sm text-gray-900 dark:text-white">
-                                        {segment.text}
-                                    </div>
-                                </div>
-                            ))}
-                            {transcriptionResult.segments.length > 5 && (
-                                <div className="text-xs text-gray-500 dark:text-gray-400 text-center mt-3">
-                                    ... and {transcriptionResult.segments.length - 5} more segments
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                    <div className="flex gap-3">
-                        <button
-                            onClick={() => downloadSRT(transcriptionResult.srt_content, `${selectedFile?.name.replace(/\.[^/.]+$/, '')}_captions.srt`)}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
-                        >
-                            Download SRT File
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Results */}
-            {processedVideoUrl && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                        Video with Auto Captions
-                    </h3>
-                    <video
-                        src={processedVideoUrl}
-                        controls
-                        className="w-full rounded-lg mb-4"
-                    />
-                    <div className="flex gap-3">
-                        <button
-                            onClick={downloadVideo}
-                            className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
-                        >
-                            Download Video with Captions
-                        </button>
-                        {transcriptionResult && (
-                            <button
-                                onClick={() => downloadSRT(transcriptionResult.srt_content, `${selectedFile?.name.replace(/\.[^/.]+$/, '')}_captions.srt`)}
-                                className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
-                            >
-                                Download SRT File
-                            </button>
-                        )}
                     </div>
                 </div>
             )}
@@ -429,6 +339,114 @@ export default function VideoProcessor() {
                     </div>
                 </div>
             )}
+        </div>
+    );
+
+    const RightColumn = () => (
+        <div className="space-y-6">
+            {/* Video Info & Thumbnail */}
+            {selectedFile && videoInfo && !error && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                        Video Information
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {thumbnailUrl && (
+                            <div>
+                                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                    Preview
+                                </h4>
+                                <img
+                                    src={thumbnailUrl}
+                                    alt="Video thumbnail"
+                                    className="w-full rounded-lg border border-gray-200 dark:border-gray-600"
+                                />
+                            </div>
+                        )}
+                        <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                                <span className="text-gray-600 dark:text-gray-400">File name:</span>
+                                <span className="text-gray-900 dark:text-white font-medium">{selectedFile.name}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600 dark:text-gray-400">File size:</span>
+                                <span className="text-gray-900 dark:text-white">{formatFileSize(selectedFile.size)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600 dark:text-gray-400">Resolution:</span>
+                                <span className="text-gray-900 dark:text-white">{videoInfo.width} × {videoInfo.height}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600 dark:text-gray-400">Duration:</span>
+                                <span className="text-gray-900 dark:text-white">{videoInfo.duration.toFixed(1)}s</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600 dark:text-gray-400">Format:</span>
+                                <span className="text-gray-900 dark:text-white">{videoInfo.format}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Generated Captions */}
+            {transcriptionResult && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                        Generated Captions
+                    </h3>
+                    <div className="mb-4">
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                            {transcriptionResult.segments.length} caption segments generated
+                        </p>
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 max-h-60 overflow-y-auto">
+                            {transcriptionResult.segments.slice(0, 5).map((segment, index) => (
+                                <div key={index} className="mb-3 last:mb-0">
+                                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+                                        {segment.start_time} → {segment.end_time}
+                                    </div>
+                                    <div className="text-sm text-gray-900 dark:text-white">
+                                        {segment.text}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => downloadSRT(transcriptionResult.srt_content, `${selectedFile?.name.replace(/\.[^/.]+$/, '')}_captions.srt`)}
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                    >
+                        Download SRT File
+                    </button>
+                </div>
+            )}
+
+            {/* Results */}
+            {processedVideoUrl && (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                        Processed Video
+                    </h3>
+                    <video
+                        src={processedVideoUrl}
+                        controls
+                        className="w-full rounded-lg mb-4"
+                    />
+                    <button
+                        onClick={downloadVideo}
+                        className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                    >
+                        Download Video with Captions
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+
+    return (
+        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <LeftColumn />
+            <RightColumn />
         </div>
     );
 }
