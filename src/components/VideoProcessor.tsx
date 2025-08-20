@@ -22,6 +22,7 @@ export default function VideoProcessor() {
     const [transcriptionResult, setTranscriptionResult] = useState<TranscriptionResult | null>(null);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [selectedFont, setSelectedFont] = useState('Roboto');
+    const [addBroll, setAddBroll] = useState(false);
 
     const fontOptions = [
         { name: 'Default Sans-serif', value: 'DejaVu Sans' },
@@ -152,6 +153,7 @@ export default function VideoProcessor() {
             formData.append('video', selectedFile);
             formData.append('srtContent', transcriptionResult.srt_content);
             formData.append('fontName', selectedFont);
+            formData.append('addBroll', String(addBroll));
             addLog('Uploading video and captions to the server...');
             updateStep('upload', { status: 'completed' });
 
@@ -280,6 +282,23 @@ export default function VideoProcessor() {
                                 The quick brown fox jumps over the lazy dog.
                             </p>
                         </div>
+                    </div>
+                )}
+
+                {/* B-roll Checkbox */}
+                {selectedFile && !error && transcriptionResult && (
+                    <div className="mb-6">
+                        <label className="flex items-center space-x-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={addBroll}
+                                onChange={(e) => setAddBroll(e.target.checked)}
+                                className="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                Automatically Add B-roll (Experimental)
+                            </span>
+                        </label>
                     </div>
                 )}
 
