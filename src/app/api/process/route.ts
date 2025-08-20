@@ -71,110 +71,130 @@ export async function POST(request: NextRequest) {
         console.log('B-roll generation enabled.');
         const segments = parseSrt(srtContent);
         const keywords = await extractKeywordsFromTranscript(segments);
+        console.log('Extracted keywords:', keywords);
 
         if (keywords.length > 0) {
             const brollVideoUrl = await findBrollVideo(keywords[0]);
+            console.log('Found B-roll video URL:', brollVideoUrl);
+
             if (brollVideoUrl) {
-                console.log(`Found B-roll video to insert: ${brollVideoUrl}`);
+                console.log(`Attempting to download B-roll video from: ${brollVideoUrl}`);
                 brollPath = path.join(uploadsDir, `${uniquePrefix}-broll.mp4`);
                 try {
                   await downloadFile(brollVideoUrl, brollPath);
-                  console.log(`B-roll video downloaded to ${brollPath}`);
+                  console.log(`B-roll video downloaded successfully to: ${brollPath}`);
                 } catch (error) {
                   console.error('Failed to download b-roll video:', error);
-                  brollPath = null; // a bit defensive
+                  brollPath = null;
                 }
+            } else {
+                console.log('No B-roll video found for the keywords.');
             }
+        } else {
+            console.log('No keywords extracted from transcript.');
         }
     }
 
     // Process with FFmpeg
     return new Promise<NextResponse>((resolve) => {
-      const command = ffmpeg(inputPath);
+      ffmpeg.ffprobe(inputPath, (err, metadata) => {
+        if (err) {
+          console.error('ffprobe error:', err);
+          return resolve(NextResponse.json({ error: 'Failed to get video metadata' }, { status: 500 }));
+        }
 
-      if (brollPath) {
-        command.input(brollPath);
-      }
+        const mainWidth = metadata.streams.find(s => s.codec_type === 'video')?.width || 1280;
+        const mainHeight = metadata.streams.find(s => s.codec_type === 'video')?.height || 720;
 
-      const complexFilter: string[] = [];
-      let videoStream = '[0:v]';
-      if (brollPath) {
-        // A simple example: overlay B-roll for 5 seconds in the middle of the video
-        // This is a complex topic. A real implementation would need to parse video durations.
-        // For now, we'll assume the main video is longer than 10s.
-        complexFilter.push('[1:v]scale=1280:720,setsar=1[broll_scaled]');
-        complexFilter.push(`${videoStream}[broll_scaled]overlay=0:0:enable='between(t,5,10)'[video_out]`);
-        videoStream = '[video_out]';
-      }
+        const command = ffmpeg(inputPath);
 
-      if (srtPath) {
-        const fontsDir = path.join(process.cwd(), 'public', 'fonts');
-        const escapedFontsDir = fontsDir.replace(/\\/g, '/').replace(/:/g, '\\:');
-        const style = `force_style='FontName=${fontName},FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`;
-        complexFilter.push(`${videoStream}subtitles=${srtPath}:fontsdir=${escapedFontsDir}:${style}[video_final]`);
-        videoStream = '[video_final]';
-      }
+        if (brollPath) {
+          command.input(brollPath);
+        }
 
-      if (complexFilter.length > 0) {
-        command.complexFilter(complexFilter, videoStream.replace(/\[|\]/g, ''));
-      }
+        const complexFilter: string[] = [];
+        let videoStream = '[0:v]';
+        if (brollPath) {
+          complexFilter.push(`[1:v]scale=${mainWidth}:${mainHeight},setsar=1[broll_scaled]`);
+          complexFilter.push(`${videoStream}[broll_scaled]overlay=0:0:enable='between(t,0,5)'[video_out]`);
+          videoStream = '[video_out]';
+        }
 
-      command.outputOptions([
-        '-c:a', 'copy',
-        '-c:v', 'libx264',
-        '-vsync', 'cfr',
-        '-crf', '28',
-        '-preset', 'ultrafast',
-        '-movflags', '+faststart',
-      ]);
+        if (srtPath) {
+          const fontsDir = path.join(process.cwd(), 'public', 'fonts');
+          const escapedFontsDir = fontsDir.replace(/\\/g, '/').replace(/:/g, '\\:');
+          const style = `force_style='FontName=${fontName},FontSize=16,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1'`;
+          complexFilter.push(`${videoStream}subtitles=${srtPath}:fontsdir=${escapedFontsDir}:${style}[video_final]`);
+          videoStream = '[video_final]';
+        }
 
-      command
-        .on('start', (commandLine) => {
-          console.log('Spawned FFmpeg with command: ' + commandLine);
-        })
-        .on('progress', (progress) => {
-          console.log('Processing: ' + (progress.percent ?? 0).toFixed(2) + '% done');
-        })
-        .on('end', async () => {
-          try {
-            const processedVideoBuffer = await readFile(outputPath);
-            await unlink(inputPath);
-            await unlink(outputPath);
-            if (srtPath) await unlink(srtPath);
-            if (brollPath) await unlink(brollPath);
+        const outputOptions = [
+          '-c:v', 'libx264',
+          '-vsync', 'cfr',
+          '-crf', '28',
+          '-preset', 'ultrafast',
+          '-movflags', '+faststart',
+        ];
+
+        if (complexFilter.length > 0) {
+          command.complexFilter(complexFilter);
+          outputOptions.push('-map', videoStream);
+          outputOptions.push('-map', '0:a?');
+          outputOptions.push('-c:a', 'copy');
+        } else {
+          outputOptions.push('-c:a', 'copy');
+        }
+
+        command.outputOptions(outputOptions);
+
+        command
+          .on('start', (commandLine) => {
+            console.log('Spawned FFmpeg with command: ' + commandLine);
+          })
+          .on('progress', (progress) => {
+            console.log('Processing: ' + (progress.percent ?? 0).toFixed(2) + '% done');
+          })
+          .on('end', async () => {
+            try {
+              const processedVideoBuffer = await readFile(outputPath);
+              await unlink(inputPath);
+              await unlink(outputPath);
+              if (srtPath) await unlink(srtPath);
+              if (brollPath) await unlink(brollPath);
+
+              const uint8Array = new Uint8Array(processedVideoBuffer);
+              resolve(new NextResponse(new Blob([uint8Array]), {
+                status: 200,
+                headers: {
+                  'Content-Type': 'video/mp4',
+                  'Content-Disposition': `attachment; filename="processed-${file.name}"`,
+                },
+              }));
+
+            } catch (error) {
+              console.error('File handling error after processing:', error);
+              resolve(NextResponse.json({
+                error: 'Processing completed but failed to read/clean up files'
+              }, { status: 500 }));
+            }
+          })
+          .on('error', async (err) => {
+            console.error('FFmpeg error:', err);
+            try {
+              await unlink(inputPath);
+              if (existsSync(outputPath)) await unlink(outputPath);
+              if (srtPath && existsSync(srtPath)) await unlink(srtPath);
+              if (brollPath && existsSync(brollPath)) await unlink(brollPath);
+            } catch (cleanupError) {
+              console.error('Cleanup error after FFmpeg failure:', cleanupError);
+            }
             
-            const uint8Array = new Uint8Array(processedVideoBuffer);
-            resolve(new NextResponse(new Blob([uint8Array]), {
-              status: 200,
-              headers: {
-                'Content-Type': 'video/mp4',
-                'Content-Disposition': `attachment; filename="processed-${file.name}"`,
-              },
-            }));
-
-          } catch (error) {
-            console.error('File handling error after processing:', error);
             resolve(NextResponse.json({ 
-              error: 'Processing completed but failed to read/clean up files'
+              error: 'Video processing failed: ' + err.message
             }, { status: 500 }));
-          }
-        })
-        .on('error', async (err) => {
-          console.error('FFmpeg error:', err);
-          try {
-            await unlink(inputPath);
-            if (existsSync(outputPath)) await unlink(outputPath);
-            if (srtPath && existsSync(srtPath)) await unlink(srtPath);
-            if (brollPath && existsSync(brollPath)) await unlink(brollPath);
-          } catch (cleanupError) {
-            console.error('Cleanup error after FFmpeg failure:', cleanupError);
-          }
-          
-          resolve(NextResponse.json({ 
-            error: 'Video processing failed: ' + err.message 
-          }, { status: 500 }));
-        })
-        .save(outputPath);
+          })
+          .save(outputPath);
+      });
     });
 
   } catch (error) {
