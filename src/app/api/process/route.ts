@@ -3,6 +3,7 @@ import { writeFile, unlink, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
+import { extractKeywordsFromTranscript, findBrollVideo } from '@/lib/b-roll';
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -72,6 +73,22 @@ export async function POST(request: NextRequest) {
     if (srtContent) {
       srtPath = path.join(uploadsDir, `${uniquePrefix}.srt`);
       await writeFile(srtPath, srtContent);
+    }
+
+    const addBroll = formData.get('addBroll') === 'true';
+
+    if (addBroll && srtContent) {
+        console.log('B-roll generation enabled.');
+        const segments = parseSrt(srtContent);
+        const keywords = await extractKeywordsFromTranscript(segments);
+
+        if (keywords.length > 0) {
+            const brollVideoUrl = await findBrollVideo(keywords[0]);
+            if (brollVideoUrl) {
+                console.log(`Found B-roll video to insert: ${brollVideoUrl}`);
+                // TODO: Download this video and add it to the ffmpeg command.
+            }
+        }
     }
 
     // Process with FFmpeg
@@ -171,4 +188,19 @@ export async function GET() {
     methods: ['POST'],
     description: 'Upload a video file to process it with FFmpeg'
   });
+}
+
+function parseSrt(srtContent: string) {
+    const pattern = /(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n([\s\S]*?(?=\n\n|\n*$))/g;
+    const segments = [];
+    let match;
+    while ((match = pattern.exec(srtContent)) !== null) {
+        segments.push({
+            id: match[1],
+            start_time: match[2],
+            end_time: match[3],
+            text: match[4].replace(/\n/g, ' '),
+        });
+    }
+    return segments;
 }
