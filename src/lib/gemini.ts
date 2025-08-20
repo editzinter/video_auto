@@ -77,12 +77,18 @@ Requirements:
     // Parse the JSON response
     let transcriptionData;
     try {
-      // Clean the response text to extract JSON
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        transcriptionData = JSON.parse(jsonMatch[0]);
+      // Clean the response text to extract JSON from markdown
+      const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/);
+      if (jsonMatch && jsonMatch[1]) {
+        transcriptionData = JSON.parse(jsonMatch[1]);
       } else {
-        throw new Error('No JSON found in response');
+        // Fallback for plain JSON
+        const plainJsonMatch = text.match(/\{[\s\S]*\}/);
+        if (plainJsonMatch) {
+          transcriptionData = JSON.parse(plainJsonMatch[0]);
+        } else {
+          throw new Error('No JSON found in response');
+        }
       }
     } catch (parseError) {
       console.error('Failed to parse Gemini response:', text);
